@@ -1,0 +1,5 @@
+UF2 Bootloader 0.9.2 lib/nrfx (v2.0.0) lib/tinyusb (0.12.0-145-g9775e7691) lib/uf2 (remotes/origin/configupdate-9-gadbb8c7)
+Model: nice!nano
+Board-ID: nRF52840-nicenano
+Date: Jul 19 2024
+SoftDevice: S140 6.1.1

@@ -11,13 +11,8 @@ target_sources(app PRIVATE
     src/main.c
     src/transport.c
     src/ble.c
-    src/bno085_hal.c
-    src/bno085.c
     src/imu.c
-    src/sh2/sh2.c
-    src/sh2/sh2_SensorValue.c
-    src/sh2/sh2_util.c
-    src/sh2/shtp.c
+    src/icm45686.c
 )
 
 target_include_directories(app PRIVATE src)

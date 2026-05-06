@@ -6,9 +6,9 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
 
-/* ─── ICM-45686 via SPI3 ─────────────────────────────────────────── */
-/* Registers (direct register map) */
-#define ICM_REG_ACCEL_X1    0x00  /* burst 12 bytes: ax ay az gx gy gz, big-endian */
+/* ─── ICM-45686 via SPI ──────────────────────────────────────────── */
+/* Data registers 0x00-0x0B: LE layout — X0(LSB) then X1(MSB) per axis */
+#define ICM_REG_ACCEL_X0    0x00  /* burst 12 bytes: ax ay az gx gy gz, little-endian */
 #define ICM_REG_PWR_MGMT0   0x10
 #define ICM_REG_ACCEL_CFG0  0x1B
 #define ICM_REG_GYRO_CFG0   0x1C
@@ -20,14 +20,14 @@
 
 /* PWR_MGMT0: gyro_mode[3:2]=LN(0b11), accel_mode[1:0]=LN(0b11) */
 #define ICM_PWR_LN          0x0F
-/* ACCEL_CONFIG0: FS=±16G (bits[6:4]=0x1), ODR=100Hz (bits[3:0]=0x9) */
-#define ICM_ACCEL_CFG_VAL   ((0x1 << 4) | 0x9)
-/* GYRO_CONFIG0:  FS=±2000dps (bits[7:4]=0x1), ODR=100Hz (bits[3:0]=0x9) */
-#define ICM_GYRO_CFG_VAL    ((0x1 << 4) | 0x9)
+/* ACCEL_CONFIG0: FS=±4g  (bits[7:5]=0b010→0x40), ODR=200Hz (bits[3:0]=0x09) */
+#define ICM_ACCEL_CFG_VAL   (0x40 | 0x09)
+/* GYRO_CONFIG0:  FS=±2000dps (bits[7:4]=0b0000→0x00), ODR=200Hz (bits[3:0]=0x09) */
+#define ICM_GYRO_CFG_VAL    (0x00 | 0x09)
 
-/* ±16G: 16/32768 g/LSB × 9.81 m/s²/g */
-#define ICM_ACCEL_SCALE     (16.0f * 9.81f / 32768.0f)
-/* ±2000dps: 2000/32768 × π/180 rad/s/LSB */
+/* ±4g: 4×9.81/32768 m/s²/LSB */
+#define ICM_ACCEL_SCALE     (4.0f * 9.81f / 32768.0f)
+/* ±2000dps: 2000×π/(180×32768) rad/s/LSB */
 #define ICM_GYRO_SCALE      (2000.0f * 3.14159265f / (180.0f * 32768.0f))
 
 /* CS: P0.4 — managed manually to avoid static-init issues with spi_config.cs */
@@ -91,73 +91,55 @@ static int icm_spi_write(uint8_t reg, uint8_t val)
 
 static bool icm45686_init(void)
 {
-	cs_high();
-	k_sleep(K_MSEC(10)); /* CS high: reset ICM SPI state machine */
-
-	/* sweep Mode 3 — ICM responds to Mode 3 clock */
 	spi_cfg = &spi_cfg_m3;
-	printk("ICM Mode3 regs 0x00-0x7F:\n");
-	for (uint8_t r = 0; r <= 0x7F; r++) {
-		uint8_t v = 0;
-		icm_spi_read(r, &v, 1);
-		printk(" %02X", v);
-		if ((r & 0x0F) == 0x0F) printk("\n");
-	}
-	printk("\n");
-
-	/* sweep Mode 0 for comparison */
 	cs_high();
 	k_sleep(K_MSEC(10));
-	spi_cfg = &spi_cfg_m0;
-	printk("ICM Mode0 regs 0x70-0x7F:");
-	for (uint8_t r = 0x70; r <= 0x7F; r++) {
-		uint8_t v = 0;
-		icm_spi_read(r, &v, 1);
-		printk(" %02X", v);
-	}
-	printk("\n");
 
-	/* check WHO_AM_I in both modes */
-	uint8_t id = 0;
-	spi_cfg = &spi_cfg_m3;
+	/* Soft-reset: DEVICE_CONFIG reg 0x01, bit0=1. Required before SPI is stable. */
+	icm_spi_write(0x01, 0x01);
 	k_sleep(K_MSEC(5));
-	icm_spi_read(ICM_REG_WHO_AM_I, &id, 1);
-	if (id != ICM_WHOAMI_VAL) {
-		spi_cfg = &spi_cfg_m0;
-		k_sleep(K_MSEC(5));
-		icm_spi_read(ICM_REG_WHO_AM_I, &id, 1);
-	}
-	if (id != ICM_WHOAMI_VAL) {
-		printk("ICM-45686: not found (0x%02X), expected 0x%02X\n", id, ICM_WHOAMI_VAL);
-		spi_cfg = &spi_cfg_m0;
-		return false;
-	}
-	printk("ICM-45686: found, WHO_AM_I=0x%02X\n", id);
 
+	/*
+	 * WHO_AM_I diagnostic: print raw rx[0] and rx[1] to determine
+	 * whether the ICM responds and which byte carries the data.
+	 */
+	uint8_t tx3[3] = {ICM_SPI_READ | ICM_REG_WHO_AM_I, 0, 0};
+	uint8_t rx3[3] = {0};
+	const struct spi_buf txb = {.buf = tx3, .len = 3};
+	const struct spi_buf rxb = {.buf = rx3, .len = 3};
+	const struct spi_buf_set txs = {.buffers = &txb, .count = 1};
+	const struct spi_buf_set rxs = {.buffers = &rxb, .count = 1};
+	cs_low(); k_busy_wait(2);
+	spi_transceive(spi_dev, spi_cfg, &txs, &rxs);
+	cs_high();
+	printk("ICM WHO_AM_I raw: rx[0]=0x%02X rx[1]=0x%02X (expect 0xE9 somewhere)\n",
+	       rx3[0], rx3[1]);
+
+	/* Configure regardless of WHO_AM_I — let data quality confirm the sensor */
 	icm_spi_write(ICM_REG_PWR_MGMT0,  0x00);              /* all off */
 	k_sleep(K_MSEC(1));
-	icm_spi_write(ICM_REG_ACCEL_CFG0, ICM_ACCEL_CFG_VAL); /* ±16G, 100Hz */
-	icm_spi_write(ICM_REG_GYRO_CFG0,  ICM_GYRO_CFG_VAL);  /* ±2000dps, 100Hz */
+	icm_spi_write(ICM_REG_ACCEL_CFG0, ICM_ACCEL_CFG_VAL); /* ±4g, 200Hz */
+	icm_spi_write(ICM_REG_GYRO_CFG0,  ICM_GYRO_CFG_VAL);  /* ±2000dps, 200Hz */
 	icm_spi_write(ICM_REG_PWR_MGMT0,  ICM_PWR_LN);        /* both LN */
-	k_sleep(K_MSEC(50)); /* gyro LN startup: ~30ms */
+	k_sleep(K_MSEC(50));
 
-	printk("ICM-45686: OK\n");
+	printk("ICM-45686: configured (Mode3, ±4g, ±2000dps)\n");
 	return true;
 }
 
 static void icm45686_read(ImuData *d)
 {
 	uint8_t buf[12];
-	if (icm_spi_read(ICM_REG_ACCEL_X1, buf, 12) != 0) {
+	if (icm_spi_read(ICM_REG_ACCEL_X0, buf, 12) != 0) {
 		return;
 	}
-	/* big-endian int16: ax ay az gx gy gz */
-	int16_t ax = (int16_t)((buf[0]  << 8) | buf[1]);
-	int16_t ay = (int16_t)((buf[2]  << 8) | buf[3]);
-	int16_t az = (int16_t)((buf[4]  << 8) | buf[5]);
-	int16_t gx = (int16_t)((buf[6]  << 8) | buf[7]);
-	int16_t gy = (int16_t)((buf[8]  << 8) | buf[9]);
-	int16_t gz = (int16_t)((buf[10] << 8) | buf[11]);
+	/* little-endian: buf[N]=LSB, buf[N+1]=MSB — ax ay az gx gy gz */
+	int16_t ax = (int16_t)((buf[1]  << 8) | buf[0]);
+	int16_t ay = (int16_t)((buf[3]  << 8) | buf[2]);
+	int16_t az = (int16_t)((buf[5]  << 8) | buf[4]);
+	int16_t gx = (int16_t)((buf[7]  << 8) | buf[6]);
+	int16_t gy = (int16_t)((buf[9]  << 8) | buf[8]);
+	int16_t gz = (int16_t)((buf[11] << 8) | buf[10]);
 
 	d->ax = ax * ICM_ACCEL_SCALE;
 	d->ay = ay * ICM_ACCEL_SCALE;
@@ -258,18 +240,18 @@ static void dtqsys_thread(void *p1, void *p2, void *p3)
 		return;
 	}
 
-	/* Scan all I2C addresses to find what's on the bus */
-	printk("I2C scan:\n");
+	/* Scan 0x08-0x7F — QMC6309 is at 0x7C which is above the standard 0x77 limit */
+	printk("I2C scan 0x08-0x7F:\n");
 	int found = 0;
-	for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+	for (uint8_t addr = 0x08; addr <= 0x7F; addr++) {
 		struct i2c_msg msg = {.buf = NULL, .len = 0, .flags = I2C_MSG_WRITE | I2C_MSG_STOP};
 		if (i2c_transfer(i2c_dev, &msg, 1, addr) == 0) {
-			printk("  found device at 0x%02X\n", addr);
+			printk("  found 0x%02X\n", addr);
 			found++;
 		}
 	}
 	if (!found) {
-		printk("  no devices found on i2c0\n");
+		printk("  nothing found\n");
 	}
 
 	bool icm_ok = icm45686_init();

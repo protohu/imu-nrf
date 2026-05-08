@@ -25,8 +25,8 @@
 /* GYRO_CONFIG0:  FS=±2000dps (bits[7:4]=0b0000→0x00), ODR=200Hz (bits[3:0]=0x09) */
 #define ICM_GYRO_CFG_VAL    (0x00 | 0x09)
 
-/* ±4g: 4×9.81/32768 m/s²/LSB */
-#define ICM_ACCEL_SCALE     (4.0f * 9.81f / 32768.0f)
+/* ±2g empirically (ICM-45686 FS_SEL=010 maps to ±2g, unlike ICM-42688): 2×9.81/32768 m/s²/LSB */
+#define ICM_ACCEL_SCALE     (2.0f * 9.81f / 32768.0f)
 /* ±2000dps: 2000×π/(180×32768) rad/s/LSB */
 #define ICM_GYRO_SCALE      (2000.0f * 3.14159265f / (180.0f * 32768.0f))
 
@@ -52,27 +52,23 @@ static inline void cs_high(void) { gpio_pin_set_raw(cs_gpio_dev, ICM_CS_PIN, 1);
 
 static int icm_spi_read(uint8_t reg, uint8_t *buf, uint8_t len)
 {
-	/* TX: [read_cmd, dummy×len]  RX: [echo, data×len] — same length for nRF SPIM */
-	uint8_t tx[13] = {ICM_SPI_READ | reg};  /* rest are 0x00 */
-	uint8_t rx[13];
-
-	if (len > 12) {
-		return -EINVAL;
-	}
-
-	const struct spi_buf tx_bufs[] = {{.buf = tx, .len = len + 1}};
-	const struct spi_buf rx_bufs[] = {{.buf = rx, .len = len + 1}};
-	const struct spi_buf_set tx_set = {.buffers = tx_bufs, .count = 1};
-	const struct spi_buf_set rx_set = {.buffers = rx_bufs, .count = 1};
+	uint8_t cmd = ICM_SPI_READ | reg;
+	const struct spi_buf tx_bufs[2] = {
+		{.buf = &cmd, .len = 1},
+		{.buf = NULL, .len = len},
+	};
+	const struct spi_buf rx_bufs[2] = {
+		{.buf = NULL, .len = 1},
+		{.buf = buf,  .len = len},
+	};
+	const struct spi_buf_set tx_set = {.buffers = tx_bufs, .count = 2};
+	const struct spi_buf_set rx_set = {.buffers = rx_bufs, .count = 2};
 
 	cs_low();
-	k_busy_wait(2); /* 2 µs CS setup time */
+	k_busy_wait(5);
 	int rc = spi_transceive(spi_dev, spi_cfg, &tx_set, &rx_set);
 	cs_high();
-
-	if (rc == 0) {
-		memcpy(buf, rx + 1, len);
-	}
+	k_busy_wait(5);
 	return rc;
 }
 
@@ -91,47 +87,54 @@ static int icm_spi_write(uint8_t reg, uint8_t val)
 
 static bool icm45686_init(void)
 {
-	spi_cfg = &spi_cfg_m3;
 	cs_high();
 	k_sleep(K_MSEC(10));
 
-	/* Soft-reset: DEVICE_CONFIG reg 0x01, bit0=1. Required before SPI is stable. */
-	icm_spi_write(0x01, 0x01);
-	k_sleep(K_MSEC(5));
+	/* Probe Mode 0, then Mode 3 — pick whichever gives WHO_AM_I=0xE9 */
+	uint8_t id = 0;
+	spi_cfg = &spi_cfg_m0;
+	for (int i = 0; i < 8; i++) {
+		icm_spi_read(ICM_REG_WHO_AM_I, &id, 1);
+	}
+	printk("ICM Mode0 WHO_AM_I=0x%02X\n", id);
 
-	/*
-	 * WHO_AM_I diagnostic: print raw rx[0] and rx[1] to determine
-	 * whether the ICM responds and which byte carries the data.
-	 */
-	uint8_t tx3[3] = {ICM_SPI_READ | ICM_REG_WHO_AM_I, 0, 0};
-	uint8_t rx3[3] = {0};
-	const struct spi_buf txb = {.buf = tx3, .len = 3};
-	const struct spi_buf rxb = {.buf = rx3, .len = 3};
-	const struct spi_buf_set txs = {.buffers = &txb, .count = 1};
-	const struct spi_buf_set rxs = {.buffers = &rxb, .count = 1};
-	cs_low(); k_busy_wait(2);
-	spi_transceive(spi_dev, spi_cfg, &txs, &rxs);
-	cs_high();
-	printk("ICM WHO_AM_I raw: rx[0]=0x%02X rx[1]=0x%02X (expect 0xE9 somewhere)\n",
-	       rx3[0], rx3[1]);
+	if (id != ICM_WHOAMI_VAL) {
+		id = 0;
+		spi_cfg = &spi_cfg_m3;
+		cs_high();
+		k_sleep(K_MSEC(1));
+		for (int i = 0; i < 8; i++) {
+			icm_spi_read(ICM_REG_WHO_AM_I, &id, 1);
+		}
+		printk("ICM Mode3 WHO_AM_I=0x%02X\n", id);
+	}
 
-	/* Configure regardless of WHO_AM_I — let data quality confirm the sensor */
-	icm_spi_write(ICM_REG_PWR_MGMT0,  0x00);              /* all off */
+	printk("ICM-45686: using Mode%d, WHO_AM_I=0x%02X%s\n",
+	       (spi_cfg == &spi_cfg_m0) ? 0 : 3, id,
+	       id == ICM_WHOAMI_VAL ? " OK" : " (expected 0xE9)");
+
+	icm_spi_write(ICM_REG_PWR_MGMT0,  0x00);
 	k_sleep(K_MSEC(1));
-	icm_spi_write(ICM_REG_ACCEL_CFG0, ICM_ACCEL_CFG_VAL); /* ±4g, 200Hz */
-	icm_spi_write(ICM_REG_GYRO_CFG0,  ICM_GYRO_CFG_VAL);  /* ±2000dps, 200Hz */
-	icm_spi_write(ICM_REG_PWR_MGMT0,  ICM_PWR_LN);        /* both LN */
+	icm_spi_write(ICM_REG_ACCEL_CFG0, ICM_ACCEL_CFG_VAL);
+	icm_spi_write(ICM_REG_GYRO_CFG0,  ICM_GYRO_CFG_VAL);
+	icm_spi_write(ICM_REG_PWR_MGMT0,  ICM_PWR_LN);
 	k_sleep(K_MSEC(50));
 
-	printk("ICM-45686: configured (Mode3, ±4g, ±2000dps)\n");
+	printk("ICM-45686: init done\n");
 	return true;
 }
 
 static void icm45686_read(ImuData *d)
 {
+	static uint32_t raw_cnt;
 	uint8_t buf[12];
 	if (icm_spi_read(ICM_REG_ACCEL_X0, buf, 12) != 0) {
 		return;
+	}
+	if (++raw_cnt <= 3) {
+		printk("ICM raw[%u]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+		       raw_cnt, buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],
+		       buf[6],buf[7],buf[8],buf[9],buf[10],buf[11]);
 	}
 	/* little-endian: buf[N]=LSB, buf[N+1]=MSB — ax ay az gx gy gz */
 	int16_t ax = (int16_t)((buf[1]  << 8) | buf[0]);
@@ -181,8 +184,9 @@ static int qmc_write(uint8_t reg, uint8_t val)
 static bool qmc6309_init(void)
 {
 	uint8_t id = 0;
-	if (qmc_read(QMC_REG_CHIP_ID, &id, 1) != 0 || id != QMC_CHIP_ID_VAL) {
-		printk("QMC6309: not found (chip_id=0x%02X)\n", id);
+	int rc = qmc_read(QMC_REG_CHIP_ID, &id, 1);
+	printk("QMC6309: chip_id rc=%d id=0x%02X\n", rc, id);
+	if (rc != 0 || id != QMC_CHIP_ID_VAL) {
 		return false;
 	}
 	printk("QMC6309: found\n");
@@ -240,12 +244,12 @@ static void dtqsys_thread(void *p1, void *p2, void *p3)
 		return;
 	}
 
-	/* Scan 0x08-0x7F — QMC6309 is at 0x7C which is above the standard 0x77 limit */
+	/* Scan 0x08-0x7F using 1-byte probe (TWIM requires len>=1) */
 	printk("I2C scan 0x08-0x7F:\n");
 	int found = 0;
 	for (uint8_t addr = 0x08; addr <= 0x7F; addr++) {
-		struct i2c_msg msg = {.buf = NULL, .len = 0, .flags = I2C_MSG_WRITE | I2C_MSG_STOP};
-		if (i2c_transfer(i2c_dev, &msg, 1, addr) == 0) {
+		uint8_t probe = 0;
+		if (i2c_write(i2c_dev, &probe, 1, addr) == 0) {
 			printk("  found 0x%02X\n", addr);
 			found++;
 		}

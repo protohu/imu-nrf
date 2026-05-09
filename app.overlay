@@ -1,0 +1,37 @@
+/* DTQSYS board pinout:
+ *   ICM-45686  — SPI2: MOSI=P1.8, MISO=P1.9, SCK=P0.7, CS=P0.4
+ *   QMC6309    — I2C0: SDA=P0.24, SCL=P0.22 (set in pinctrl.dtsi)
+ */
+
+&pinctrl {
+	/* ICM-45686 SPI — MISO with pull-up so floating line reads 0xFF, not 0x00 */ spi2_default: spi2_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 1, 8)>, <NRF_PSEL(SPIM_SCK, 0, 7)>;
+		};
+
+		group2 {
+			psels = <NRF_PSEL(SPIM_MISO, 1, 9)>;
+			bias-pull-up;
+		};
+	};
+
+	spi2_sleep: spi2_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 1, 8)>, <NRF_PSEL(SPIM_MISO, 1, 9)>, <NRF_PSEL(SPIM_SCK, 0, 7)>;
+			low-power-enable;
+		};
+	};
+}; /* QMC6309 on I2C (no clock stretching needed — keep TWIM) */
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+}; /* ICM-45686 on SPI2 (SPIM2 at 0x40023000 — no USBD conflict), CS = P0.4 manual */
+
+&spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+};

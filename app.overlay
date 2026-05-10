@@ -21,12 +21,18 @@
 			low-power-enable;
 		};
 	};
-}; /* QMC6309 on I2C (no clock stretching needed — keep TWIM) */
+}; /* ICM-45686 on SPI2 (SPIM2 at 0x40023000 — no USBD conflict), CS = P0.4 manual */
+
+/* QMC6309 I2C: SDA=D pad→P0.24, SCL=C pad→P0.22. Enable internal pull-ups (no ext. resistors). */
+&i2c0_default {
+	group1 {
+		bias-pull-up;
+	};
+};
 
 &i2c0 {
-	status = "okay";
-	clock-frequency = <I2C_BITRATE_FAST>;
-}; /* ICM-45686 on SPI2 (SPIM2 at 0x40023000 — no USBD conflict), CS = P0.4 manual */
+	clock-frequency = <I2C_BITRATE_STANDARD>; /* 100 kHz — safer for wired connections */
+};
 
 &spi2 {
 	compatible = "nordic,nrf-spim";

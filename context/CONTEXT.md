@@ -129,3 +129,90 @@ CONFIG_BT_L2CAP_TX_MTU=64
 CONFIG_BT_BUF_ACL_TX_SIZE=72
 CONFIG_BT_BUF_ACL_TX_COUNT=6
 ```
+
+## Пины
+B+
+RAW
+GND
+RST
+VCC
+031
+029
+002
+115
+113
+111
+010
+009
+B+
+006
+008
+GND
+GND
+017
+020
+022
+024
+100
+011
+104
+106
+и отдельно стоят C, D, G, V
+это все распаяно на одной плате nrf52840, icm45686, QMC6309
+
+Что видно по плате
+
+У тебя:
+
+USB-C
+LiPo input (B+)
+RAW/VCC regulators
+reset
+полный breakout GPIO
+IMU на борту
+магнитометр на борту
+SWD pads (C D G V)
+
+И это очень похоже на:
+
+wearable mocap node architecture.
+Расшифровка выводов
+Левая сторона
+Label	nRF GPIO
+031	P0.31
+029	P0.29
+002	P0.02
+115	P1.15
+113	P1.13
+111	P1.11
+010	P0.10
+009	P0.09
+Правая сторона
+Label	nRF GPIO
+008	P0.08
+006	P0.06
+017	P0.17
+020	P0.20
+022	P0.22
+024	P0.24
+100	P1.00
+011	P0.11
+104	P1.04
+106	P1.06
+
+Это соответствует стандартной нумерации Nordic.
+
+Самое важное
+C D G V
+
+Это почти наверняка:
+
+Label	Значение
+C	SWCLK
+D	SWDIO
+G	GND
+V	VTref/3.3V
+
+То есть:
+
+у тебя есть полноценный SWD debug/programming header.

@@ -15,7 +15,7 @@
  */
 #define GY85_GYRO_SCALE  823.4f   /* rad/s  → ITG3200 counts */
 #define GY85_ACCEL_SCALE  26.1f   /* m/s²   → ADXL345 counts */
-#define GY85_MAG_SCALE    10.9f   /* µT     → HMC5883L counts */
+#define GY85_MAG_SCALE    1.0f   /* µT     → HMC5883L counts */
 
 /* IMU payload — 9 int16, 18 bytes. Fits in default ATT MTU=23 (max payload 20). */
 typedef struct __attribute__((packed)) {

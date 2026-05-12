@@ -7,15 +7,20 @@
 #include "transport.h"
 #include "ble.h"
 
+/* ── Частоты ─────────────────────────────────────────────────────────────── */
+#define SAMPLE_HZ   100U   /* частота опроса датчика (должна совпадать с icm45686.c) */
+#define BLE_HZ       50U   /* частота BLE-нотификаций                               */
+#define LOG_HZ       1U   /* частота вывода в консоль (0 = выключить)              */
+
 /*
  * GY-85 compatibility scaling — server expects raw sensor counts from GY-85 hardware:
- *   Gyro  (ITG3200):  14.375 LSB per °/s  → BNO085 rad/s × (180/π) × 14.375 = × 823.4
- *   Accel (ADXL345):  256 LSB per g       → BNO085 m/s² ÷ 9.81 × 256         = × 26.1
- *   Mag   (HMC5883L): 10.9 LSB per µT     → BNO085 µT × 10.9
+ *   Gyro  (ITG3200):  14.375 LSB per °/s  → rad/s × (180/π) × 14.375 = × 823.4
+ *   Accel (ADXL345):  256 LSB per g       → m/s² ÷ 9.81 × 256         = × 26.1
+ *   Mag   (HMC5883L): 10.9 LSB per µT     → µT × 10.9
  */
-#define GY85_GYRO_SCALE  823.4f   /* rad/s  → ITG3200 counts */
-#define GY85_ACCEL_SCALE  26.1f   /* m/s²   → ADXL345 counts */
-#define GY85_MAG_SCALE    1.0f   /* µT     → HMC5883L counts */
+#define GY85_GYRO_SCALE  823.4f   /* rad/s → ITG3200 counts */
+#define GY85_ACCEL_SCALE  26.1f   /* m/s² → ADXL345 counts */
+#define GY85_MAG_SCALE   10.9f   /* µT   → HMC5883L counts */
 
 /* IMU payload — 9 int16, 18 bytes. Fits in default ATT MTU=23 (max payload 20). */
 typedef struct __attribute__((packed)) {
@@ -62,13 +67,9 @@ static const struct bt_data sd[] = {
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, IMU_SVC_UUID_VAL),
 };
 
-static void imu_log(const ImuData *data, uint32_t dt_us,
-		    uint32_t *cnt, bool enabled)
+static void imu_log(const ImuData *data, uint32_t dt_us, uint32_t *cnt)
 {
-	if (!enabled) {
-		return;
-	}
-	if (++(*cnt) < (IMU_SAMPLE_HZ / IMU_LOG_HZ)) {
+	if (LOG_HZ == 0 || ++(*cnt) < (SAMPLE_HZ / LOG_HZ)) {
 		return;
 	}
 	*cnt = 0;
@@ -92,7 +93,6 @@ int main(void)
 		while (1) { k_sleep(K_MSEC(1000)); }
 	}
 
-	bool log_enabled = true;
 	uint32_t log_cnt = 0;
 	uint32_t notify_cnt = 0;
 	uint32_t prev_ts_us = 0;
@@ -113,14 +113,14 @@ int main(void)
 			uint32_t dt_us = (prev_ts_us != 0) ? (data.timestamp_us - prev_ts_us) : 0;
 			prev_ts_us = data.timestamp_us;
 
-			imu_log(&data, dt_us, &log_cnt, log_enabled);
+			imu_log(&data, dt_us, &log_cnt);
 
-			if (notify_enabled && (++notify_cnt % (IMU_SAMPLE_HZ / IMU_BLE_HZ)) == 0) {
+			if (notify_enabled && (++notify_cnt % (SAMPLE_HZ / BLE_HZ)) == 0) {
 				const struct bt_gatt_attr *attr = &imu_svc.attrs[2];
 				bt_gatt_notify(current_conn, attr, &imu_payload, sizeof(imu_payload));
 			}
 		}
-		k_sleep(K_MSEC(2));
+		k_sleep(K_MSEC(1000U / (SAMPLE_HZ * 5U)));
 	}
 
 	return 0;

@@ -27,7 +27,7 @@
 #define ICM_ACCEL_CFG_VAL    (0x40 | 0x09)
 #define ICM_GYRO_CFG_VAL     (0x00 | 0x09)
 
-#define ICM_ACCEL_SCALE      (4.0f * 9.81f / 32768.0f)
+#define ICM_ACCEL_SCALE      (2.0f * 9.81f / 32768.0f)
 #define ICM_GYRO_SCALE       (2000.0f * 3.14159265f / (180.0f * 32768.0f))
 
 #define ICM_CS_PIN 4
@@ -240,8 +240,9 @@ static bool icm45686_read_valid(ImuData *d)
         int16_t gy = (int16_t)((buf[9]<<8)|buf[8]);
         int16_t gz = (int16_t)((buf[11]<<8)|buf[10]);
 
-        /* Проверка разумности акселерометра (Z должен быть около 9.8 м/с² → raw ~16384) */
-        if (abs(az) < 12000 || abs(az) > 26000 || abs(ax) > 26000 || abs(ay) > 26000) {
+        /* Норма вектора ≥ 0.3g (5000 raw): не зависит от ориентации датчика */
+        int64_t anorm2 = (int64_t)ax*ax + (int64_t)ay*ay + (int64_t)az*az;
+        if (anorm2 < 25000000LL) {
             bad_frames++;
             if (bad_frames >= 4) {
                 uint32_t now = k_uptime_get_32();

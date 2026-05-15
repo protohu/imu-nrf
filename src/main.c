@@ -8,19 +8,18 @@
 #include "ble.h"
 
 /* ── Частоты ─────────────────────────────────────────────────────────────── */
-#define SAMPLE_HZ   100U   /* частота опроса датчика (должна совпадать с icm45686.c) */
-#define BLE_HZ       50U   /* частота BLE-нотификаций                               */
+#define SAMPLE_HZ   40U   /* частота опроса датчика (должна совпадать с icm45686.c) */
+#define BLE_HZ       5в том U   /* частота BLE-нотификаций                               */
 #define LOG_HZ       1U   /* частота вывода в консоль (0 = выключить)              */
 
-/*
- * GY-85 compatibility scaling — server expects raw sensor counts from GY-85 hardware:
- *   Gyro  (ITG3200):  14.375 LSB per °/s  → rad/s × (180/π) × 14.375 = × 823.4
- *   Accel (ADXL345):  256 LSB per g       → m/s² ÷ 9.81 × 256         = × 26.1
- *   Mag   (HMC5883L): 10.9 LSB per µT     → µT × 10.9
+/* Physical-unit scaling for BLE int16 payload:
+ *   Gyro:  rad/s  × 1000  →  mrad/s   (max ±34.9 rad/s → ±34900, safe with bad-frame filter at ±29000 raw)
+ *   Accel: m/s²   × 1000  →  mm/s²    (max ±2g = ±19620, fits int16)
+ *   Mag:   µT     × 100   →  0.01 µT  (max ±60 µT = ±6000, fits int16)
  */
-#define GY85_GYRO_SCALE  823.4f   /* rad/s → ITG3200 counts */
-#define GY85_ACCEL_SCALE  26.1f   /* m/s² → ADXL345 counts */
-#define GY85_MAG_SCALE   10.9f   /* µT   → HMC5883L counts */
+#define IMU_GYRO_SCALE  1000.0f   /* rad/s  → int16 */
+#define IMU_ACCEL_SCALE 1000.0f   /* m/s²   → int16 */
+#define IMU_MAG_SCALE    100.0f   /* µT     → int16 */
 
 /* IMU payload — 9 int16, 18 bytes. Fits in default ATT MTU=23 (max payload 20). */
 typedef struct __attribute__((packed)) {
@@ -100,15 +99,15 @@ int main(void)
 	while (1) {
 		ImuData data;
 		if (imu_get_data(&data)) {
-			imu_payload.gx = (int16_t)(data.gx * GY85_GYRO_SCALE);
-			imu_payload.gy = (int16_t)(data.gy * GY85_GYRO_SCALE);
-			imu_payload.gz = (int16_t)(data.gz * GY85_GYRO_SCALE);
-			imu_payload.ax = (int16_t)(data.ax * GY85_ACCEL_SCALE);
-			imu_payload.ay = (int16_t)(data.ay * GY85_ACCEL_SCALE);
-			imu_payload.az = (int16_t)(data.az * GY85_ACCEL_SCALE);
-			imu_payload.mx = (int16_t)(data.mx * GY85_MAG_SCALE);
-			imu_payload.my = (int16_t)(data.my * GY85_MAG_SCALE);
-			imu_payload.mz = (int16_t)(data.mz * GY85_MAG_SCALE);
+			imu_payload.gx = (int16_t)(data.gx * IMU_GYRO_SCALE);
+			imu_payload.gy = (int16_t)(data.gy * IMU_GYRO_SCALE);
+			imu_payload.gz = (int16_t)(data.gz * IMU_GYRO_SCALE);
+			imu_payload.ax = (int16_t)(data.ax * IMU_ACCEL_SCALE);
+			imu_payload.ay = (int16_t)(data.ay * IMU_ACCEL_SCALE);
+			imu_payload.az = (int16_t)(data.az * IMU_ACCEL_SCALE);
+			imu_payload.mx = (int16_t)(data.mx * IMU_MAG_SCALE);
+			imu_payload.my = (int16_t)(data.my * IMU_MAG_SCALE);
+			imu_payload.mz = (int16_t)(data.mz * IMU_MAG_SCALE);
 
 			uint32_t dt_us = (prev_ts_us != 0) ? (data.timestamp_us - prev_ts_us) : 0;
 			prev_ts_us = data.timestamp_us;

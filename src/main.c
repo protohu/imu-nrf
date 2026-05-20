@@ -66,15 +66,15 @@ static const struct bt_data sd[] = {
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, IMU_SVC_UUID_VAL),
 };
 
-static void imu_log(const ImuData *data, uint32_t dt_us, uint32_t *cnt)
+static void imu_log(const ImuPayload *data, uint32_t dt_us, uint32_t *cnt)
 {
 	if (LOG_HZ == 0 || ++(*cnt) < (SAMPLE_HZ / LOG_HZ)) {
 		return;
 	}
 	*cnt = 0;
 	uint32_t hz = (dt_us > 0) ? (1000000U / dt_us) : 0;
-	printk("[%uus dt=%uus ~%uHz] G:%.2f %.2f %.2f A:%.2f %.2f %.2f M:%.2f %.2f %.2f\n",
-	       data->timestamp_us, dt_us, hz,
+	printk("[dt=%uus ~%uHz] G:%.2f %.2f %.2f A:%.2f %.2f %.2f M:%.2f %.2f %.2f\n",
+	       dt_us, hz,
 	       (double)data->gx, (double)data->gy, (double)data->gz,
 	       (double)data->ax, (double)data->ay, (double)data->az,
 	       (double)data->mx, (double)data->my, (double)data->mz);
@@ -112,7 +112,7 @@ int main(void)
 			uint32_t dt_us = (prev_ts_us != 0) ? (data.timestamp_us - prev_ts_us) : 0;
 			prev_ts_us = data.timestamp_us;
 
-			imu_log(&data, dt_us, &log_cnt);
+			imu_log(&imu_payload, dt_us, &log_cnt);
 
 			if (notify_enabled && (++notify_cnt % (SAMPLE_HZ / BLE_HZ)) == 0) {
 				const struct bt_gatt_attr *attr = &imu_svc.attrs[2];

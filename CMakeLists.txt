@@ -12,7 +12,7 @@ target_sources(app PRIVATE
     src/transport.c
     src/ble.c
     src/imu.c
-    src/icm45686.c
+    src/gy85.c
 )
 
 target_include_directories(app PRIVATE src)

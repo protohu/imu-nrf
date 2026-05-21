@@ -8,18 +8,22 @@
 #include "ble.h"
 
 /* ── Частоты ─────────────────────────────────────────────────────────────── */
-#define SAMPLE_HZ   40U   /* частота опроса датчика (должна совпадать с icm45686.c) */
-#define BLE_HZ       5U   /* частота BLE-нотификаций                               */
+#define SAMPLE_HZ  100U   /* частота опроса датчика (должна совпадать с icm45686.c) */
+#define BLE_HZ      25U   /* частота BLE-нотификаций                               */
 #define LOG_HZ       1U   /* частота вывода в консоль (0 = выключить)              */
 
-/* Physical-unit scaling for BLE int16 payload:
- *   Gyro:  rad/s  × 1000  →  mrad/s   (max ±34.9 rad/s → ±34900, safe with bad-frame filter at ±29000 raw)
- *   Accel: m/s²   × 1000  →  mm/s²    (max ±2g = ±19620, fits int16)
- *   Mag:   µT     × 100   →  0.01 µT  (max ±60 µT = ±6000, fits int16)
+/*
+ * GY-85 compatibility scaling — server pipeline expects ITG3200/ADXL345/HMC5883L counts:
+ *   Gyro  (ITG3200):  14.375 LSB/°/s  → rad/s × (180/π) × 14.375 = × 823.4
+ *   Accel (ADXL345):  256 LSB/g       → m/s² ÷ 9.81 × 256          = × 26.1
+ *   Mag   (HMC5883L): 10.9 LSB/µT     → µT × 10.9
+ *
+ * Server pipeline: int16 / 100 / 0.14375 °/s → rad/s (gyro only; acc/mag are normalised).
+ * 823.4 / 100 / 0.14375 × π/180 = 1.000 rad/s per rad/s ✓
  */
-#define IMU_GYRO_SCALE  1000.0f   /* rad/s  → int16 */
-#define IMU_ACCEL_SCALE 1000.0f   /* m/s²   → int16 */
-#define IMU_MAG_SCALE    100.0f   /* µT     → int16 */
+#define IMU_GYRO_SCALE   823.4f   /* rad/s  → ITG3200 counts */
+#define IMU_ACCEL_SCALE   26.1f   /* m/s²   → ADXL345 counts */
+#define IMU_MAG_SCALE     10.9f   /* µT     → HMC5883L counts */
 
 /* IMU payload — 9 int16, 18 bytes. Fits in default ATT MTU=23 (max payload 20). */
 typedef struct __attribute__((packed)) {

@@ -23,11 +23,14 @@
 #define ICM_WHO_AM_I_VAL     0xE9
 
 #define ICM_PWR_LN           0x0F
-#define ICM_ACCEL_CFG_VAL    (0x40 | 0x09)
-#define ICM_GYRO_CFG_VAL     (0x00 | 0x09)
+/* ICM-45686 FS_SEL bits are at [7:4], ODR at [3:0].
+ * ACCEL_CONFIG0: 0000=±32g 0001=±16g 0010=±8g 0011=±4g 0100=±2g
+ * GYRO_CONFIG0:  0000=±4000dps 0001=±2000dps 0010=±1000dps ... */
+#define ICM_ACCEL_CFG_VAL    (0x40 | 0x09)   /* bits[7:4]=0100 → ±2g,     ODR=200 Hz */
+#define ICM_GYRO_CFG_VAL     (0x10 | 0x09)   /* bits[7:4]=0001 → ±2000dps, ODR=200 Hz */
 
-#define ICM_ACCEL_SCALE      (2.0f * 9.81f / 32768.0f)
-#define ICM_GYRO_SCALE       (2000.0f * 3.14159265f / (180.0f * 32768.0f))
+#define ICM_ACCEL_SCALE      (2.0f * 9.81f / 32768.0f)   /* ±2g */
+#define ICM_GYRO_SCALE       (2000.0f * 3.14159265f / (180.0f * 32768.0f))   /* ±2000dps */
 
 /* I2C addresses: AP_AD0=0 → 0x68, AP_AD0=1 → 0x69 */
 #define ICM_ADDR_0           0x68u
@@ -40,6 +43,9 @@
 static const struct device *i2c_dev;
 static uint8_t icm_addr;
 static K_MUTEX_DEFINE(icm_bus_mutex);
+
+/* Gyro zero-rate offset measured at startup (rad/s). */
+static float gyro_bias[3] = {0};
 
 /* ==================== I2C low-level ==================== */
 static int icm_read(uint8_t reg, uint8_t *buf, uint8_t len)
@@ -258,9 +264,9 @@ static bool icm45686_read_valid(ImuData *d)
 		d->ax = ax * ICM_ACCEL_SCALE;
 		d->ay = ay * ICM_ACCEL_SCALE;
 		d->az = az * ICM_ACCEL_SCALE;
-		d->gx = gx * ICM_GYRO_SCALE;
-		d->gy = gy * ICM_GYRO_SCALE;
-		d->gz = gz * ICM_GYRO_SCALE;
+		d->gx = gx * ICM_GYRO_SCALE - gyro_bias[0];
+		d->gy = gy * ICM_GYRO_SCALE - gyro_bias[1];
+		d->gz = gz * ICM_GYRO_SCALE - gyro_bias[2];
 		d->timestamp_us = (uint32_t)(k_uptime_get() * 1000U);
 		return true;
 	}
@@ -354,8 +360,17 @@ static void qmc6309_update(ImuData *d)
 	qmc_last_raw[0] = raw[0]; qmc_last_raw[1] = raw[1]; qmc_last_raw[2] = raw[2];
 	qmc_has_last = true;
 
-	const float alpha = 0.18f;
-	float nv[3] = { raw[0] * QMC_MAG_SCALE, raw[1] * QMC_MAG_SCALE, raw[2] * QMC_MAG_SCALE };
+	/* Output raw QMC µT values — axis alignment is handled by the server-side
+	 * mag_cal joint calibration (mag + gravity ellipsoid fit). Any fixed
+	 * firmware rotation would need to be reapplied after every recalibration
+	 * and is redundant when mag_cal can absorb it automatically. */
+	float nv[3] = {
+		raw[0] * QMC_MAG_SCALE,
+		raw[1] * QMC_MAG_SCALE,
+		raw[2] * QMC_MAG_SCALE,
+	};
+
+	const float alpha = 0.5f;
 	if (qmc_last[0] == 0.0f && qmc_last[1] == 0.0f && qmc_last[2] == 0.0f) {
 		qmc_last[0] = nv[0]; qmc_last[1] = nv[1]; qmc_last[2] = nv[2];
 	} else {
@@ -370,6 +385,34 @@ static void qmc6309_update(ImuData *d)
 static ImuData latest = {0};
 static bool data_ready = false;
 static K_MUTEX_DEFINE(dtqsys_mutex);
+
+#define GYRO_BIAS_SAMPLES 200
+
+static void calibrate_gyro_bias(void)
+{
+	float sum[3] = {0.0f};
+	int count = 0;
+	int64_t next = k_uptime_get() + 10;
+
+	while (count < GYRO_BIAS_SAMPLES) {
+		ImuData d = {0};
+		if (icm45686_read_valid(&d)) {
+			sum[0] += d.gx;   /* float += float: OK */
+			sum[1] += d.gy;
+			sum[2] += d.gz;
+			count++;
+		}
+		int64_t delay = next - k_uptime_get();
+		if (delay > 0) k_sleep(K_MSEC((int32_t)delay));
+		next += 10;
+	}
+
+	gyro_bias[0] = sum[0] / GYRO_BIAS_SAMPLES;
+	gyro_bias[1] = sum[1] / GYRO_BIAS_SAMPLES;
+	gyro_bias[2] = sum[2] / GYRO_BIAS_SAMPLES;
+	printk("Gyro bias: gx=%.4f gy=%.4f gz=%.4f rad/s\n",
+	       (double)gyro_bias[0], (double)gyro_bias[1], (double)gyro_bias[2]);
+}
 
 static void dtqsys_thread(void *p1, void *p2, void *p3)
 {
@@ -393,7 +436,9 @@ static void dtqsys_thread(void *p1, void *p2, void *p3)
 	}
 
 	bool qmc_ok = qmc6309_init();
-	printk("DTQSYS: ICM=1 QMC=%d\n", qmc_ok);
+	printk("DTQSYS: ICM=1 QMC=%d — калибровка гироскопа (держи плату неподвижно)...\n", qmc_ok);
+	calibrate_gyro_bias();
+	printk("DTQSYS ready\n");
 
 	int64_t next_tick = k_uptime_get() + 10;
 

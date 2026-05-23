@@ -32,12 +32,12 @@ typedef struct __attribute__((packed)) {
 	int16_t mx, my, mz;
 } ImuPayload;
 
-/* Service UUID:        ceb5483e-36e1-4688-b7f5-ea07361b26a8 */
-/* Characteristic UUID: ceb5483e-36e1-4688-b7f5-ea07361b26a9 */
+/* Service UUID:        beb5483e-36e1-4688-b7f5-ea07361b26a8 */
+/* Characteristic UUID: beb5483e-36e1-4688-b7f5-ea07361b26a9 */
 #define IMU_SVC_UUID_VAL \
-	BT_UUID_128_ENCODE(0xceb5483e, 0x36e1, 0x4688, 0xb7f5, 0xea07361b26a8)
+	BT_UUID_128_ENCODE(0xbeb5483e, 0x36e1, 0x4688, 0xb7f5, 0xea07361b26a8)
 #define IMU_CHR_UUID_VAL \
-	BT_UUID_128_ENCODE(0xceb5483e, 0x36e1, 0x4688, 0xb7f5, 0xea07361b26a9)
+	BT_UUID_128_ENCODE(0xbeb5483e, 0x36e1, 0x4688, 0xb7f5, 0xea07361b26a9)
 
 static struct bt_uuid_128 imu_svc_uuid = BT_UUID_INIT_128(IMU_SVC_UUID_VAL);
 static struct bt_uuid_128 imu_chr_uuid = BT_UUID_INIT_128(IMU_CHR_UUID_VAL);

@@ -12,6 +12,7 @@ static const struct bt_data *adv_sd;
 static size_t adv_sd_len;
 
 static struct k_work_delayable adv_work;
+static struct k_work_delayable sub_watchdog;
 static K_SEM_DEFINE(bt_ready_sem, 0, 1);
 
 static void mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
@@ -39,6 +40,22 @@ static void adv_work_handler(struct k_work *work)
 	adv_restart();
 }
 
+/* Periodic check: if connected but server is not subscribed to notifications,
+ * the Python app likely died (BlueZ resets the CCC when the DBus owner dies).
+ * Disconnect so advertising restarts and the new server session can connect. */
+static void sub_watchdog_handler(struct k_work *work)
+{
+	if (!current_conn) {
+		return;
+	}
+	if (!notify_enabled) {
+		printk("BLE: no GATT subscription — dropping stale connection\n");
+		bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+	} else {
+		k_work_schedule(&sub_watchdog, K_SECONDS(5));
+	}
+}
+
 static void adv_watchdog_thread(void *p1, void *p2, void *p3)
 {
 	k_sem_take(&bt_ready_sem, K_FOREVER);
@@ -63,6 +80,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	current_conn = bt_conn_ref(conn);
 	printk("BLE connected, MTU=%u\n", bt_gatt_get_mtu(conn));
 
+	k_work_schedule(&sub_watchdog, K_SECONDS(5));
+
 	bt_gatt_exchange_mtu(conn, &mtu_params);
 
 	/* 10–20 ms connection interval, 1 s supervision timeout */
@@ -79,6 +98,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("BLE disconnected: %d\n", reason);
 	notify_enabled = false;
+	k_work_cancel_delayable(&sub_watchdog);
 	bt_conn_unref(current_conn);
 	current_conn = NULL;
 	k_work_schedule(&adv_work, K_MSEC(100));
@@ -98,6 +118,7 @@ int ble_init(const struct bt_data *ad, size_t ad_len,
 	adv_sd_len = sd_len;
 
 	k_work_init_delayable(&adv_work, adv_work_handler);
+	k_work_init_delayable(&sub_watchdog, sub_watchdog_handler);
 
 	int ret = bt_enable(NULL);
 	if (ret != 0) {
